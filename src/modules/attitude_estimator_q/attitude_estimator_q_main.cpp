@@ -294,13 +294,16 @@ void AttitudeEstimatorQ::task_main()
 
 		if (orb_copy(ORB_ID(sensor_combined), _sensors_sub, &sensors) == PX4_OK) {
 			// Feed validator with recent sensor data
-
+            //获取角速度和加速度数据
 			if (sensors.timestamp > 0) {
 				_gyro(0) = sensors.gyro_rad[0];
 				_gyro(1) = sensors.gyro_rad[1];
 				_gyro(2) = sensors.gyro_rad[2];
 			}
-
+            //在sensor_combined.msg中引入相对时间戳，make timestamps relative
+            //This is needed for the new logger & saves some space as well.
+            //两个目的：新日志需要；节省空间。为什么？为什么获取角速率不需要判断相对时间？
+            //https://github.com/PX4/Firmware/commit/c5ea4b43be86d11901bcf50cdd369bdc0307b212
 			if (sensors.accelerometer_timestamp_relative != sensor_combined_s::RELATIVE_TIMESTAMP_INVALID) {
 				_accel(0) = sensors.accelerometer_m_s2[0];
 				_accel(1) = sensors.accelerometer_m_s2[1];
@@ -316,6 +319,7 @@ void AttitudeEstimatorQ::task_main()
 		}
 
 		// Update magnetometer
+		//更新磁力计数据
 		bool magnetometer_updated = false;
 		orb_check(_magnetometer_sub, &magnetometer_updated);
 
@@ -323,6 +327,8 @@ void AttitudeEstimatorQ::task_main()
 			vehicle_magnetometer_s magnetometer = {};
 
 			if (orb_copy(ORB_ID(vehicle_magnetometer), _magnetometer_sub, &magnetometer) == PX4_OK) {
+				//为什么不需要在判断时间？猜测：只有当_data_good=true时，update函数中进行初始化，否则不更新四元数
+				//当_data_good=true时，角速度和加速度获取都没问题，则磁力计获取应该也没问题。
 				_mag(0) = magnetometer.magnetometer_ga[0];
 				_mag(1) = magnetometer.magnetometer_ga[1];
 				_mag(2) = magnetometer.magnetometer_ga[2];
@@ -336,6 +342,7 @@ void AttitudeEstimatorQ::task_main()
 		}
 
 		// Update vision and motion capture heading
+		//获取视觉系统和运动捕捉系统的航向
 		bool vision_updated = false;
 		orb_check(_vision_sub, &vision_updated);
 
@@ -372,12 +379,13 @@ void AttitudeEstimatorQ::task_main()
 				math::Matrix<3, 3> Rmoc = q.to_dcm();
 
 				math::Vector<3> v(1.0f, 0.0f, 0.4f);
-
+                //v为某种磁场矢量
+                //https://github.com/PX4/Firmware/commit/f6a9647fe61167e77af955ec5d8756253e78f8db
 				// Rmoc is Rwr (robot respect to world) while v is respect to world.
 				// Hence Rmoc must be transposed having (Rwr)' * Vw
 				// Rrw * Vw = vn. This way we have consistency
 				_mocap_hdg = Rmoc.transposed() * v;
-
+                //如果v（1,0,0）,得到旋转矩阵的x轴，与航向有关
 				// Motion Capture external heading usage (ATT_EXT_HDG_M 2)
 				if (_ext_hdg_mode == 2) {
 					// Check for timeouts on data
@@ -395,6 +403,7 @@ void AttitudeEstimatorQ::task_main()
 			if (orb_copy(ORB_ID(vehicle_global_position), _global_pos_sub, &gpos) == PX4_OK) {
 				if (_mag_decl_auto && gpos.eph < 20.0f && hrt_elapsed_time(&gpos.timestamp) < 1000000) {
 					/* set magnetic declination automatically */
+					//自动根据经纬度获取磁偏角
 					update_mag_declination(math::radians(get_mag_declination(gpos.lat, gpos.lon)));
 				}
 
@@ -406,6 +415,7 @@ void AttitudeEstimatorQ::task_main()
 					if (_vel_prev_t != 0 && gpos.timestamp != _vel_prev_t) {
 						float vel_dt = (gpos.timestamp - _vel_prev_t) / 1e6f;
 						/* calculate acceleration in body frame */
+						//计算加速度，并映射到机体坐标系下
 						_pos_acc = _q.conjugate_inversed((vel - _vel_prev) / vel_dt);
 					}
 
